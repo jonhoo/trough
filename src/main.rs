@@ -233,7 +233,7 @@ fn noise(
         c2r.process_immutable_with_scratch(&spectrum[..], &mut time[..], &mut scratch[..]);
 
         for sample in &time {
-            assert!(sample.im < 1., "{}", sample.im);
+            assert!(sample.im.abs() < 1., "{}", sample.im);
             let amplitude = sample.re.round();
             let amplitude = amplitude + amplitude * dampen;
             let amplitude = (amplitude as i64).clamp(i16::MIN as i64, i16::MAX as i64) as i16;
