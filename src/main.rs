@@ -186,8 +186,10 @@ fn noise(
     let out = std::fs::File::create("audio.wav")?;
     let mut out = BufWriter::new(out);
     out.write_all(b"RIFF")?;
+    // 5 fixed-size u32 fields follow: WAVE, fmt chunk id, fmt chunk size,
+    // data chunk id, and data chunk size.
     out.write_all(
-        &(sample_data_len + 3 * 4 + std::mem::size_of_val(&format) as u32).to_le_bytes(),
+        &(sample_data_len + 5 * 4 + std::mem::size_of_val(&format) as u32).to_le_bytes(),
     )?;
     out.write_all(b"WAVE")?;
     write_chunk(b"fmt ", format, &mut out)?;
