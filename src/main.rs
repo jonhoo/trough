@@ -154,7 +154,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ra1000 = r_a(1000.);
             noise(args.duration, |spectrum| {
                 for (hz, bin) in spectrum.iter_mut().enumerate().skip(20) {
-                    let a_in_db = 20. * r_a(hz as f64).log10() - 20. * ra1000.log10();
+                    // hz is 0-indexed within the closure, but the closure receives
+                    // bins starting at frequency 1, so actual frequency is hz + 1.
+                    let a_in_db =
+                        20. * r_a((hz + 1) as f64).log10() - 20. * ra1000.log10();
                     let avg_in_db = 20. * avg_amplitude.log10();
                     let target_in_db = avg_in_db - a_in_db;
                     let a = 10.0f64.powf(target_in_db / 20.);
