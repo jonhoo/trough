@@ -38,17 +38,66 @@ const SAMPLES_PER_SECOND: u32 = MAX_FREQUENCY * 2;
 const AVG_BYTES_PER_SECOND: u32 =
     CHANNELS as u32 * SAMPLES_PER_SECOND * (BITS_PER_SAMPLE / 8) as u32;
 
-fn main() -> Result<(), std::io::Error> {
+enum Color {
+    White,
+    Pink,
+    Brownian,
+    Blue,
+    Violet,
+    Grey,
+}
+
+struct Args {
+    color: Color,
+    duration: u32,
+}
+
+fn parse_args() -> Result<Args, lexopt::Error> {
+    use lexopt::prelude::*;
+
+    let mut color = None;
+    let mut duration = 20;
+    let mut parser = lexopt::Parser::from_env();
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Short('d') | Long("duration") => {
+                duration = parser.value()?.parse()?;
+            }
+            Value(val) if color.is_none() => {
+                color = Some(val.parse_with(|color| match color {
+                    "white" => Ok(Color::White),
+                    "pink" => Ok(Color::Pink),
+                    "brownian" => Ok(Color::Brownian),
+                    "blue" => Ok(Color::Blue),
+                    "violet" => Ok(Color::Violet),
+                    "grey" => Ok(Color::Grey),
+                    _ => Err("unknown color"),
+                })?);
+            }
+            Long("help") => {
+                println!("Usage: trough [-d|--duration=SECONDS] COLOR");
+                std::process::exit(0);
+            }
+            _ => return Err(arg.unexpected()),
+        }
+    }
+
+    let color = color.unwrap_or(Color::White);
+    Ok(Args { color, duration })
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_args()?;
     let mut rng = rand::rng();
     let avg_amplitude = 8.;
-    match std::env::args().nth(1).as_deref() {
-        None | Some("white") => noise(|spectrum| {
+    match args.color {
+        Color::White => noise(args.duration, |spectrum| {
             for bin in spectrum {
                 *bin =
                     Complex::from_polar(avg_amplitude, rng.random::<f64>() * std::f64::consts::TAU);
             }
         })?,
-        Some("pink") => noise(|spectrum| {
+        Color::Pink => noise(args.duration, |spectrum| {
             let normalization = avg_amplitude * f64::sqrt(MAX_FREQUENCY as f64 / 2.);
             let power = normalization.powi(2);
             for (hz, bin) in spectrum.iter_mut().enumerate().skip(20) {
@@ -58,7 +107,7 @@ fn main() -> Result<(), std::io::Error> {
                 );
             }
         })?,
-        Some("brownian") => noise(|spectrum| {
+        Color::Brownian => noise(args.duration, |spectrum| {
             // TODO: normalize this (and everything) by computing area under the curve of
             // amplitudes (maybe of power density instead?) and normalizing that to a particular
             // number. you know, instead of eyeballing "brownian is ~4x quieter than pink".
@@ -72,7 +121,7 @@ fn main() -> Result<(), std::io::Error> {
                 );
             }
         })?,
-        Some("blue") => noise(|spectrum| {
+        Color::Blue => noise(args.duration, |spectrum| {
             let normalization = avg_amplitude / f64::sqrt(MAX_FREQUENCY as f64 / 2.);
             let power = normalization.powi(2);
             for (hz, bin) in spectrum.iter_mut().enumerate() {
@@ -82,7 +131,7 @@ fn main() -> Result<(), std::io::Error> {
                 );
             }
         })?,
-        Some("violet") => noise(|spectrum| {
+        Color::Violet => noise(args.duration, |spectrum| {
             let normalization = avg_amplitude / f64::sqrt(MAX_FREQUENCY as f64 / 2.) / 4.;
             let power = normalization.powi(2);
             for (hz, bin) in spectrum.iter_mut().enumerate() {
@@ -92,7 +141,7 @@ fn main() -> Result<(), std::io::Error> {
                 );
             }
         })?,
-        Some("grey") => {
+        Color::Grey => {
             // https://en.wikipedia.org/wiki/A-weighting
             let r_a = |hz: f64| {
                 ((12194.0f64).powi(2) * hz.powi(4))
@@ -103,7 +152,7 @@ fn main() -> Result<(), std::io::Error> {
                         * (hz.powi(2) + (12194.0f64).powi(2)))
             };
             let ra1000 = r_a(1000.);
-            noise(|spectrum| {
+            noise(args.duration, |spectrum| {
                 for (hz, bin) in spectrum.iter_mut().enumerate().skip(20) {
                     let a_in_db = 20. * r_a(hz as f64).log10() - 20. * ra1000.log10();
                     let avg_in_db = 20. * avg_amplitude.log10();
@@ -113,14 +162,15 @@ fn main() -> Result<(), std::io::Error> {
                 }
             })?
         }
-        Some(kind) => todo!("{kind} noise not supported (yet)"),
     }
 
     Ok(())
 }
 
-fn noise(mut spectrum_setup: impl FnMut(&mut [Complex<f64>])) -> Result<(), std::io::Error> {
-    let duration_in_seconds = 20;
+fn noise(
+    duration_in_seconds: u32,
+    mut spectrum_setup: impl FnMut(&mut [Complex<f64>]),
+) -> Result<(), std::io::Error> {
     let sample_data_len = AVG_BYTES_PER_SECOND * duration_in_seconds;
     let format = FormatChunkCommon {
         format_tag: WaveFormatCategory::Pcm,
