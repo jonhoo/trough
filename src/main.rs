@@ -216,10 +216,9 @@ fn noise(
             for (hz, bin) in pos.iter_mut().enumerate().skip(1) {
                 *bin *= Complex::from_polar(
                     1.,
-                    rng.random::<f64>()
+                    (rng.random::<f64>() - 0.5)
                         * (hz as f64 / MAX_FREQUENCY as f64)
-                        * std::f64::consts::FRAC_PI_2
-                        - std::f64::consts::FRAC_PI_4,
+                        * std::f64::consts::FRAC_PI_2,
                 );
             }
         }
