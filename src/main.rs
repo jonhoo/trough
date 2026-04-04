@@ -1,3 +1,10 @@
+// Colored-noise generator. We construct a frequency-domain spectrum — one
+// complex number per frequency bin, with the amplitude defining the noise
+// "color" and a random phase making it sound like noise rather than a chord —
+// then inverse-FFT to produce time-domain audio samples written as a WAV file.
+//
+// <https://en.wikipedia.org/wiki/Colors_of_noise>
+
 use rand::RngExt;
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::io::BufWriter;
@@ -33,7 +40,10 @@ struct FormatChunkPcm {
 
 const CHANNELS: u16 = 1;
 const BITS_PER_SAMPLE: u16 = 16;
+// Upper bound of human hearing, matching CD-quality audio (44.1 kHz).
 const MAX_FREQUENCY: u32 = 22050;
+// Must be at least 2× the highest frequency we want to reproduce (Nyquist).
+// <https://en.wikipedia.org/wiki/Nyquist_frequency>
 const SAMPLES_PER_SECOND: u32 = MAX_FREQUENCY * 2;
 const AVG_BYTES_PER_SECOND: u32 =
     CHANNELS as u32 * SAMPLES_PER_SECOND * (BITS_PER_SAMPLE / 8) as u32;
@@ -58,7 +68,7 @@ struct Args {
 /// at 1000 Hz by the standard's convention. Used both for grey noise spectral
 /// shaping (inverse A-weighting) and for A-weighted loudness normalization.
 ///
-/// https://en.wikipedia.org/wiki/A-weighting
+/// <https://en.wikipedia.org/wiki/A-weighting>
 fn r_a(hz: f64) -> f64 {
     ((12194.0f64).powi(2) * hz.powi(4))
         / ((hz.powi(2) + 20.6f64.powi(2))
@@ -118,12 +128,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let num_positive_bins = (SAMPLES_PER_SECOND / 2 - 1) as f64;
     let target_rms = avg_amplitude * (2.0 * num_positive_bins).sqrt();
 
+    // Each closure below defines a spectral shape: the amplitude of each
+    // frequency bin. `noise()` handles the absolute scaling. The `from_polar`
+    // pattern encodes amplitude and phase into a single complex FFT bin.
+    // <https://en.wikipedia.org/wiki/Spectral_density>
     match args.color {
         Color::White => noise(args.duration, target_rms, |spectrum| {
             for bin in spectrum {
                 *bin = Complex::from_polar(1., rng.random::<f64>() * std::f64::consts::TAU);
             }
         })?,
+        // Amplitude ∝ 1/√f (power ∝ 1/f). skip(20): below 20 Hz is inaudible.
+        // <https://en.wikipedia.org/wiki/Pink_noise>
         Color::Pink => noise(args.duration, target_rms, |spectrum| {
             for (hz, bin) in spectrum.iter_mut().enumerate().skip(20) {
                 *bin = Complex::from_polar(
@@ -132,6 +148,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         })?,
+        // Amplitude ∝ 1/f (power ∝ 1/f²). Steeper rolloff than pink.
+        // <https://en.wikipedia.org/wiki/Brownian_noise>
         Color::Brownian => noise(args.duration, target_rms, |spectrum| {
             for (hz, bin) in spectrum.iter_mut().enumerate().skip(20) {
                 *bin = Complex::from_polar(
@@ -140,6 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         })?,
+        // Amplitude ∝ √f — the spectral inverse of pink.
         Color::Blue => noise(args.duration, target_rms, |spectrum| {
             for (hz, bin) in spectrum.iter_mut().enumerate() {
                 *bin = Complex::from_polar(
@@ -148,6 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         })?,
+        // Amplitude ∝ f — the spectral inverse of brownian.
         Color::Violet => noise(args.duration, target_rms, |spectrum| {
             for (hz, bin) in spectrum.iter_mut().enumerate() {
                 *bin = Complex::from_polar(
@@ -156,6 +176,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         })?,
+        // Inverts A-weighting (a model of human loudness perception across
+        // frequencies) so the noise sounds perceptually flat. See `r_a`.
+        // <https://en.wikipedia.org/wiki/A-weighting>
         Color::Grey => {
             let ra1000 = r_a(1000.);
             noise(args.duration, target_rms, |spectrum| {
@@ -215,15 +238,23 @@ fn noise(
     scratch.resize(c2r.get_immutable_scratch_len(), Complex::ZERO);
 
     let mut rng = rand::rng();
+    // Fade-in: starts at −1 (full cancellation: `amp + amp × −1 = 0`) and ramps
+    // to 0 over ~10,000 samples (~0.23 s). Avoids a startup click from the
+    // abrupt onset of audio at sample 0.
     let mut dampen = -1.0;
+    // We generate one second of audio per iteration. Each second gets a slightly
+    // perturbed spectrum so the noise evolves over time rather than being a
+    // repeating 1-second loop.
     for interval in 0..duration_in_seconds {
         let (pos, neg) = spectrum.split_at_mut(SAMPLES_PER_SECOND as usize / 2);
         if interval == 0 {
             spectrum_setup(&mut pos[1..]);
+            // DC (bin 0) would be an inaudible constant offset.
             pos[0] = Complex::ZERO;
 
             // Normalize so all noise colors are perceptually equally loud,
-            // using A-weighted energy. By Parseval's theorem for RustFFT's
+            // using A-weighted energy. By Parseval's theorem
+            // (<https://en.wikipedia.org/wiki/Parseval%27s_theorem>) for RustFFT's
             // unnormalized IFFT with conjugate symmetry, the raw time-domain
             // RMS is `sqrt(2 × Σ |A(k)|²)`. We apply the same formula but
             // weight each bin's energy by the square of its A-weighting factor
@@ -249,6 +280,12 @@ fn noise(
                 *bin *= scale;
             }
         } else {
+            // Phases undergo a Brownian walk rather than being regenerated from
+            // scratch. Fully re-randomizing would cause discontinuities at second
+            // boundaries — especially at low frequencies, where a single cycle
+            // can span the entire 1-second window and a phase jump creates an
+            // audible click. Higher frequencies tolerate larger phase steps, hence
+            // the `hz / MAX_FREQUENCY` scaling.
             for (hz, bin) in pos.iter_mut().enumerate().skip(1) {
                 *bin *= Complex::from_polar(
                     1.,
@@ -258,14 +295,20 @@ fn noise(
                 );
             }
         }
-        // populate conjugates
+        // For the IFFT output to be real-valued (as audio must be),
+        // negative-frequency bins must be the complex conjugate of their
+        // positive counterparts (Hermitian symmetry).
+        // <https://en.wikipedia.org/wiki/Hermitian_function>
         for (bin, pos) in neg.iter_mut().skip(1).zip(pos.iter().rev()) {
             *bin = pos.conj();
         }
+        // Nyquist bin: can only represent a signal alternating ±1 every sample.
         neg[0] = Complex::ZERO;
         c2r.process_immutable_with_scratch(&spectrum[..], &mut time[..], &mut scratch[..]);
 
         for sample in &time {
+            // If Hermitian symmetry is correct, the IFFT output is purely real.
+            // A non-negligible imaginary part indicates a spectrum setup bug.
             assert!(sample.im.abs() < 1., "{}", sample.im);
             let amplitude = sample.re.round();
             let amplitude = amplitude + amplitude * dampen;
