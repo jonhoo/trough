@@ -45,6 +45,7 @@ enum Color {
     Blue,
     Violet,
     Grey,
+    Black,
 }
 
 struct Args {
@@ -71,6 +72,7 @@ fn parse_args() -> Result<Args, lexopt::Error> {
                     "blue" => Ok(Color::Blue),
                     "violet" => Ok(Color::Violet),
                     "grey" => Ok(Color::Grey),
+                    "black" => Ok(Color::Black),
                     _ => Err("unknown color"),
                 })?);
             }
@@ -141,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         })?,
+        Color::Black => noise(args.duration, |_| {})?,
         Color::Grey => {
             // https://en.wikipedia.org/wiki/A-weighting
             let r_a = |hz: f64| {
