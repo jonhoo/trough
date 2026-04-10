@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+easyfft = "0.4.2"
 lexopt = "0.3.2"
 rand = "0.10.0"
-realfft = "3.5.0"
-rustfft = "6.4.1"
 zerocopy = { version = "0.8.48", features = ["derive", "std"] }

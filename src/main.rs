@@ -5,8 +5,10 @@
 //
 // <https://en.wikipedia.org/wiki/Colors_of_noise>
 
+use easyfft::dyn_size::realfft::DynRealDft;
+use easyfft::num_complex::Complex;
+use easyfft::prelude::*;
 use rand::RngExt;
-use rustfft::{FftPlanner, num_complex::Complex};
 use std::io::BufWriter;
 use std::io::Write;
 use zerocopy::{
@@ -229,13 +231,8 @@ fn noise(
     out.write_all(&sample_data_len.to_le_bytes())?;
 
     let length = SAMPLES_PER_SECOND as usize;
-    let mut real_planner = FftPlanner::<f64>::new();
-    let c2r = real_planner.plan_fft_inverse(length);
-
-    let mut spectrum = [Complex::ZERO; SAMPLES_PER_SECOND as usize];
-    let mut time = [Complex::ZERO; SAMPLES_PER_SECOND as usize];
-    let mut scratch = Vec::new();
-    scratch.resize(c2r.get_immutable_scratch_len(), Complex::ZERO);
+    let mut dft = DynRealDft::<f64>::default(length);
+    let mut time = vec![0.0f64; length];
 
     let mut rng = rand::rng();
     // Fade-in: starts at −1 (full cancellation: `amp + amp × −1 = 0`) and ramps
@@ -246,15 +243,13 @@ fn noise(
     // perturbed spectrum so the noise evolves over time rather than being a
     // repeating 1-second loop.
     for interval in 0..duration_in_seconds {
-        let (pos, neg) = spectrum.split_at_mut(SAMPLES_PER_SECOND as usize / 2);
+        let bins = dft.get_frequency_bins_mut();
         if interval == 0 {
-            spectrum_setup(&mut pos[1..]);
-            // DC (bin 0) would be an inaudible constant offset.
-            pos[0] = Complex::ZERO;
+            spectrum_setup(bins);
 
             // Normalize so all noise colors are perceptually equally loud,
             // using A-weighted energy. By Parseval's theorem
-            // (<https://en.wikipedia.org/wiki/Parseval%27s_theorem>) for RustFFT's
+            // (<https://en.wikipedia.org/wiki/Parseval%27s_theorem>) for the
             // unnormalized IFFT with conjugate symmetry, the raw time-domain
             // RMS is `sqrt(2 × Σ |A(k)|²)`. We apply the same formula but
             // weight each bin's energy by the square of its A-weighting factor
@@ -265,7 +260,7 @@ fn noise(
             // This only runs on the first interval because subsequent intervals
             // preserve bin magnitudes (phase-only evolution).
             let ra1000 = r_a(1000.);
-            let a_weighted_energy: f64 = pos[1..]
+            let a_weighted_energy: f64 = bins
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
@@ -274,11 +269,7 @@ fn noise(
                 })
                 .sum::<f64>()
                 * 2.0;
-            let current_rms = a_weighted_energy.sqrt();
-            let scale = target_rms / current_rms;
-            for bin in pos[1..].iter_mut() {
-                *bin *= scale;
-            }
+            dft *= target_rms / a_weighted_energy.sqrt();
         } else {
             // Phases undergo a Brownian walk rather than being regenerated from
             // scratch. Fully re-randomizing would cause discontinuities at second
@@ -286,31 +277,20 @@ fn noise(
             // can span the entire 1-second window and a phase jump creates an
             // audible click. Higher frequencies tolerate larger phase steps, hence
             // the `hz / MAX_FREQUENCY` scaling.
-            for (hz, bin) in pos.iter_mut().enumerate().skip(1) {
+            for (hz, bin) in bins.iter_mut().enumerate() {
                 *bin *= Complex::from_polar(
                     1.,
                     (rng.random::<f64>() - 0.5)
-                        * (hz as f64 / MAX_FREQUENCY as f64)
+                        * ((hz + 1) as f64 / MAX_FREQUENCY as f64)
                         * std::f64::consts::FRAC_PI_2,
                 );
             }
         }
-        // For the IFFT output to be real-valued (as audio must be),
-        // negative-frequency bins must be the complex conjugate of their
-        // positive counterparts (Hermitian symmetry).
-        // <https://en.wikipedia.org/wiki/Hermitian_function>
-        for (bin, pos) in neg.iter_mut().skip(1).zip(pos.iter().rev()) {
-            *bin = pos.conj();
-        }
-        // Nyquist bin: can only represent a signal alternating ±1 every sample.
-        neg[0] = Complex::ZERO;
-        c2r.process_immutable_with_scratch(&spectrum[..], &mut time[..], &mut scratch[..]);
 
-        for sample in &time {
-            // If Hermitian symmetry is correct, the IFFT output is purely real.
-            // A non-negligible imaginary part indicates a spectrum setup bug.
-            assert!(sample.im.abs() < 1., "{}", sample.im);
-            let amplitude = sample.re.round();
+        dft.real_ifft_using(&mut time);
+
+        for &sample in &time {
+            let amplitude = sample.round();
             let amplitude = amplitude + amplitude * dampen;
             let amplitude = (amplitude as i64).clamp(i16::MIN as i64, i16::MAX as i64) as i16;
             dampen = (dampen + 0.0001).min(0.);
