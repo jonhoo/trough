@@ -33,4 +33,12 @@ colored noise theory, and inverse FFT-based synthesis.
 
 The stream ended at https://github.com/jonhoo/trough/tree/33623289870346696724769cded6dc2bbb07fc1d.
 
+After the stream, I ran the hand-written code through Claude Code for an
+audit and polish pass. Its access to domain-knowledge meant that it
+caught both a few correctness issues and identified some good
+improvements (including good contextual comments). The analysis,
+prompts, and resulting changes are all in #1, and is worth a read even
+(or perhaps *especially*) if you're skeptical of the utility of LLMs and
+agentic coding!
+
 [stream]: https://youtu.be/zOTE4BN59u4
