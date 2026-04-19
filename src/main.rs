@@ -232,8 +232,8 @@ fn noise(
     let mut real_planner = FftPlanner::<f64>::new();
     let c2r = real_planner.plan_fft_inverse(length);
 
-    let mut spectrum = [Complex::ZERO; SAMPLES_PER_SECOND as usize];
-    let mut time = [Complex::ZERO; SAMPLES_PER_SECOND as usize];
+    let mut spectrum = vec![Complex::ZERO; SAMPLES_PER_SECOND as usize];
+    let mut time = vec![Complex::ZERO; SAMPLES_PER_SECOND as usize];
     let mut scratch = Vec::new();
     scratch.resize(c2r.get_immutable_scratch_len(), Complex::ZERO);
 
